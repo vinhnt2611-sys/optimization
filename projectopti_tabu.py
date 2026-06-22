@@ -243,5 +243,3 @@ if __name__ == "__main__":
     main()
 
 
-#ok con de 
-# ok ae 
