@@ -23,55 +23,59 @@ def read_instance():
     return n, m, k, parcel_quantity, capacity, distance
 
 
-def request_nodes(request, n, m):
-    if request < n:
+def request_nodes(request, n, m): # target is to determine where is the pickup place, where is the dropoff place 
+    if request < n: # people 
         pickup = request + 1
         dropoff = pickup + n + m
-        return pickup, dropoff
+        return pickup, dropoff  # 0,1,2,... is request to carry people
 
-    parcel = request - n
+    parcel = request - n  # convert parcel pick up to fit row-indexing
     pickup = n + parcel + 1
     dropoff = 2 * n + m + parcel + 1
-    return pickup, dropoff
+    return pickup, dropoff  # n, n + 1,.... is to carry parcel
 
 
-def request_demand(request, n, parcel_quantity):
-    if request < n:
+def request_demand(request, n, parcel_quantity): # require how many capacity of the taxi
+    if request < n: # if carry people, loading is 0
         return 0
-    return parcel_quantity[request - n]
+    return parcel_quantity[request - n] # because m + n = request, and m is the quantity of parcel
 
 
 def insertion_delta(route, position, request, n, m, distance):
-    pickup, dropoff = request_nodes(request, n, m)
+    pickup, dropoff = request_nodes(request, n, m) # determine the selection pickup and dropoff of a newly inserted point
 
-    if position == 0:
+    if position == 0: # the ending and starting point is depot 0, so if position is 0, then the previous of it must be 0, meaning the depot
         previous = 0
     else:
-        _, previous = request_nodes(route[position - 1], n, m)
+        _, previous = request_nodes(route[position - 1], n, m) # determine the dropoff place to insert, _ meaning skip the pickup
 
     if position == len(route):
-        following = 0
+        following = 0 # ending is the last of the route, need to comeback to depot 0
     else:
-        following, _ = request_nodes(route[position], n, m)
+        following, _ = request_nodes(route[position], n, m) # next of the dropoff is the pickup of the next route
 
     return (
-        distance[previous][pickup]
-        + distance[pickup][dropoff]
+        distance[previous][pickup]  # before the insertion
+        + distance[pickup][dropoff]  # previous -> pickup -> dropoff -> following
         + distance[dropoff][following]
-        - distance[previous][following]
-    )
+        - distance[previous][following]   # old route  
+    )   # A -> P
+        # + P -> D
+        # + D -> B   THIS CODE WANTS TO RETURN THE DIFFERENCE OF NEW AND OLD COST
+        # - A -> B
 
 
-def request_priority(request, n, m, parcel_quantity, capacity, distance):
+def request_priority(request, n, m, parcel_quantity, capacity, distance): # prioritize easily execute request
+    # High priority meaning that less taxi can sastisfy the request or the route is long if go alone
     pickup, dropoff = request_nodes(request, n, m)
     standalone = (
         distance[0][pickup]
         + distance[pickup][dropoff]
-        + distance[dropoff][0]
-    )
+        + distance[dropoff][0] # 0 -> pickup -> dropoff -> 0
+    )  
     demand = request_demand(request, n, parcel_quantity)
-    eligible_taxis = sum(cap >= demand for cap in capacity)
-    return eligible_taxis, -standalone
+    eligible_taxis = sum(cap >= demand for cap in capacity)  # eligible_taxis = sum(cap >= demand for cap in capacity), counting how many taxis can sastisfy this parcel
+    return eligible_taxis, -standalone # prioritize higher standalone
 
 
 def best_insertion(
