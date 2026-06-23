@@ -1,322 +1,303 @@
+import heapq
 import random
 import sys
 import time
+from array import array
 
-NEG = -10**12
-TIME_LIMIT = 0.35 # maximum runtime of LNS
-MAX_ITERATIONS = 120 # meaning that LNS stops when reach time limit or max iterations
-DESTROY_COUNT = 2 # remove all assginment of two cars, and then using dp to reconstruct the two cars
-RATIO_CANDIDATES = 70 # top 70 , just like the previous code 
-RANDOM_CANDIDATES = 30 # increasing variane
-RESET_AFTER = 25 # if after 25 round the solution is not more efficient, comeback to the previous best solution
+
+TIME_LIMIT = 0.75
+MAX_ITERATIONS = 200
+DESTROY_ROUTES = 2
+RCL_SIZE = 4
+RESET_AFTER = 20
 RANDOM_SEED = 42
 
 
-def choose_subset(cands, weight, value, low, high):
-    dp = [NEG] * (high + 1)
-    picked = [None] * (high + 1)
-    dp[0] = 0
-    picked[0] = ()
+def read_row(expected):
+    values = []
+    while len(values) < expected:
+        values.extend(map(int, sys.stdin.buffer.readline().split()))
+    return values
 
-    for oid in cands:
-        current_weight = weight[oid]
-        if current_weight > high:
+
+def read_instance():
+    first = sys.stdin.buffer.readline().split()
+    if not first:
+        return None
+
+    n, m, k = map(int, first)
+    parcel_quantity = read_row(m)
+    capacity = read_row(k)
+    size = 2 * n + 2 * m + 1
+    distance = [array("I", read_row(size)) for _ in range(size)]
+    return n, m, k, parcel_quantity, capacity, distance
+
+
+def request_nodes(request, n, m):
+    if request < n:
+        pickup = request + 1
+        return pickup, pickup + n + m
+
+    parcel = request - n
+    return n + parcel + 1, 2 * n + m + parcel + 1
+
+
+def request_demand(request, n, parcel_quantity):
+    return 0 if request < n else parcel_quantity[request - n]
+
+
+def insertion_delta(route, position, request, n, m, distance):
+    pickup, dropoff = request_nodes(request, n, m)
+    previous = 0 if position == 0 else request_nodes(route[position - 1], n, m)[1]
+    following = 0 if position == len(route) else request_nodes(route[position], n, m)[0]
+    return (
+        distance[previous][pickup]
+        + distance[pickup][dropoff]
+        + distance[dropoff][following]
+        - distance[previous][following]
+    )
+
+
+def request_priority(request, n, m, parcel_quantity, capacity, distance):
+    pickup, dropoff = request_nodes(request, n, m)
+    direct_cost = (
+        distance[0][pickup]
+        + distance[pickup][dropoff]
+        + distance[dropoff][0]
+    )
+    demand = request_demand(request, n, parcel_quantity)
+    eligible_count = sum(taxi_capacity >= demand for taxi_capacity in capacity)
+    return eligible_count, -direct_cost
+
+
+def insertion_choices(
+    request,
+    routes,
+    lengths,
+    n,
+    m,
+    parcel_quantity,
+    capacity,
+    distance,
+    limit,
+):
+    demand = request_demand(request, n, parcel_quantity)
+    largest = max(lengths, default=0)
+    largest_count = sum(length == largest for length in lengths)
+    second_largest = max((x for x in lengths if x != largest), default=0)
+    choices = []
+
+    for taxi, route in enumerate(routes):
+        if capacity[taxi] < demand:
             continue
 
-        current_value = value[oid]
-        for cap in range(high, current_weight - 1, -1):
-            previous_value = dp[cap - current_weight]
-            if previous_value == NEG:
-                continue
+        other_max = largest
+        if lengths[taxi] == largest and largest_count == 1:
+            other_max = second_largest
 
-            new_value = previous_value + current_value
-            if new_value > dp[cap]:
-                dp[cap] = new_value
-                picked[cap] = (oid, picked[cap - current_weight])
+        for position in range(len(route) + 1):
+            delta = insertion_delta(route, position, request, n, m, distance)
+            new_length = lengths[taxi] + delta
+            key = (max(other_max, new_length), new_length, delta)
+            choices.append((key, taxi, position, delta))
 
-    best_cap = -1
-    best_score = NEG
-    for cap in range(low, high + 1):
-        if dp[cap] == NEG:
-            continue
+    if not choices:
+        return []
+    if limit == 1:
+        return [min(choices)]
+    return heapq.nsmallest(limit, choices)
 
-        score = dp[cap] - (cap - low) * 10000
-        if score > best_score:
-            best_score = score
-            best_cap = cap
 
-    if best_cap < 0:
+def greedy_routes(n, m, k, parcel_quantity, capacity, distance):
+    routes = [[] for _ in range(k)]
+    lengths = [0] * k
+    requests = list(range(n + m))
+    requests.sort(
+        key=lambda request: request_priority(
+            request, n, m, parcel_quantity, capacity, distance
+        )
+    )
+
+    for request in requests:
+        choices = insertion_choices(
+            request,
+            routes,
+            lengths,
+            n,
+            m,
+            parcel_quantity,
+            capacity,
+            distance,
+            1,
+        )
+        if not choices:
+            raise ValueError("No taxi has enough capacity for a parcel")
+
+        _, taxi, position, delta = choices[0]
+        routes[taxi].insert(position, request)
+        lengths[taxi] += delta
+
+    return routes, lengths
+
+
+def objective(lengths):
+    return max(lengths, default=0), sum(lengths)
+
+
+def choose_destroyed_routes(routes, lengths, rng):
+    nonempty = [taxi for taxi, route in enumerate(routes) if route]
+    if not nonempty:
         return []
 
-    chosen = []
-    node = picked[best_cap]
-    while node:
-        oid, node = node
-        chosen.append(oid)
-    return chosen
+    nonempty.sort(key=lambda taxi: lengths[taxi], reverse=True)
+    first = rng.choice(nonempty[: min(3, len(nonempty))])
+    destroyed = [first]
+    remaining = [taxi for taxi in nonempty if taxi != first]
+    extra = min(DESTROY_ROUTES - 1, len(remaining))
+    if extra:
+        destroyed.extend(rng.sample(remaining, extra))
+    return destroyed
 
 
-def build_candidates(used, weight, high, by_ratio, by_weight):
-    cands = []
-    seen = set()
-
-    for oid in by_ratio:
-        if not used[oid] and weight[oid] <= high:
-            cands.append(oid)
-            seen.add(oid)
-            if len(cands) == RATIO_CANDIDATES:
-                break
-
-    for current_weight in range(1, min(100, high) + 1):
-        taken = 0
-        for oid in by_weight[current_weight]:
-            if not used[oid] and oid not in seen:
-                cands.append(oid)
-                seen.add(oid)
-                taken += 1
-                if taken == 2:
-                    break
-
-    return cands
+def destroy(routes, lengths, destroyed):
+    removed = []
+    for taxi in destroyed:
+        removed.extend(routes[taxi])
+        routes[taxi] = []
+        lengths[taxi] = 0
+    return removed
 
 
-def solution_score(assigned, value):
-    return sum(
-        value[oid]
-        for oid in range(1, len(assigned))
-        if assigned[oid] != 0
-    )
-
-
-def make_initial_solution(n, k, weight, value, low, high):
-    """Create the starting solution with the original greedy and DP method."""
-    vehicles = list(range(1, k + 1))
-    by_ratio = list(range(1, n + 1))
-    by_ratio.sort(
-        key=lambda oid: (value[oid] / weight[oid], value[oid]),
-        reverse=True,
-    )
-
-    by_weight = [[] for _ in range(101)]
-    for oid in range(1, n + 1):
-        by_weight[weight[oid]].append(oid)
-    for current_weight in range(1, 101):
-        by_weight[current_weight].sort(
-            key=lambda oid: value[oid],
-            reverse=True,
-        )
-
-    vehicle_order = sorted(
-        vehicles,
-        key=lambda b: (high[b] - low[b], high[b], -low[b]),
-    )
-    used = [False] * (n + 1)
-    assigned = [0] * (n + 1)
-    load = [0] * (k + 1)
-
-    for b in vehicle_order:
-        cands = build_candidates(
-            used, weight, high[b], by_ratio, by_weight
-        )
-        chosen = choose_subset(
-            cands, weight, value, low[b], high[b]
-        )
-
-        if not chosen:
-            cands = [
-                oid
-                for oid in range(1, n + 1)
-                if not used[oid] and weight[oid] <= high[b]
-            ]
-            chosen = choose_subset(
-                cands, weight, value, low[b], high[b]
-            )
-
-        for oid in chosen:
-            used[oid] = True
-            assigned[oid] = b
-            load[b] += weight[oid]
-
-    fill_remaining(
-        assigned, load, vehicles, by_ratio, weight, low, high
-    )
-    return assigned, load, by_ratio
-
-
-def fill_remaining(assigned, load, vehicles, by_ratio, weight, low, high):
-    """Use best-fit greedy to fill free capacity after a repair."""
-    for oid in by_ratio:
-        if assigned[oid] != 0:
-            continue
-
-        best_vehicle = 0
-        best_left = 10**18
-        for b in vehicles:
-            if load[b] < low[b]:
-                continue
-
-            left = high[b] - load[b] - weight[oid]
-            if 0 <= left < best_left:
-                best_vehicle = b
-                best_left = left
-
-        if best_vehicle:
-            assigned[oid] = best_vehicle
-            load[best_vehicle] += weight[oid]
-
-
-def repair_destroyed_vehicles(
-    assigned,
-    load,
-    destroyed,
-    by_ratio,
-    weight,
-    value,
-    low,
-    high,
+def repair(
+    removed,
+    routes,
+    lengths,
+    n,
+    m,
+    parcel_quantity,
+    capacity,
+    distance,
     rng,
 ):
-    """Remove selected vehicles' orders and rebuild those vehicles with DP."""
-    for oid in range(1, len(assigned)):
-        if assigned[oid] in destroyed:
-            assigned[oid] = 0
-    for b in destroyed:
-        load[b] = 0
-
-    repair_order = destroyed[:]
-    rng.shuffle(repair_order)
-
-    for b in repair_order:
-        eligible = [
-            oid
-            for oid in by_ratio
-            if assigned[oid] == 0 and weight[oid] <= high[b]
-        ]
-        if not eligible:
-            continue
-
-        cands = eligible[:RATIO_CANDIDATES]
-        remaining = eligible[RATIO_CANDIDATES:]
-        if remaining:
-            sample_size = min(RANDOM_CANDIDATES, len(remaining))
-            cands.extend(rng.sample(remaining, sample_size))
-
-        chosen = choose_subset(
-            cands, weight, value, low[b], high[b]
+    removed.sort(
+        key=lambda request: request_priority(
+            request, n, m, parcel_quantity, capacity, distance
         )
-
-        for oid in chosen:
-            assigned[oid] = b
-            load[b] += weight[oid]
-
-    fill_remaining(
-        assigned, load, destroyed, by_ratio, weight, low, high
     )
 
-    return all(
-        load[b] == 0 or low[b] <= load[b] <= high[b]
-        for b in destroyed
-    )
+    for request in removed:
+        choices = insertion_choices(
+            request,
+            routes,
+            lengths,
+            n,
+            m,
+            parcel_quantity,
+            capacity,
+            distance,
+            RCL_SIZE,
+        )
+        if not choices:
+            return False
+
+        if len(choices) == 1 or rng.random() < 0.65:
+            _, taxi, position, delta = choices[0]
+        else:
+            _, taxi, position, delta = rng.choice(choices[1:])
+
+        routes[taxi].insert(position, request)
+        lengths[taxi] += delta
+    return True
 
 
 def large_neighborhood_search(
-    assigned, load, vehicles, by_ratio, weight, value, low, high
+    routes, lengths, n, m, parcel_quantity, capacity, distance
 ):
-    """Improve the greedy solution by repeatedly destroying and repairing it."""
     rng = random.Random(RANDOM_SEED)
     start = time.perf_counter()
-
-    current_assigned = assigned[:]
-    current_load = load[:]
-    best_assigned = assigned[:]
-    best_load = load[:]
-    best_score = solution_score(best_assigned, value)
+    current_routes = [route[:] for route in routes]
+    current_lengths = lengths[:]
+    best_routes = [route[:] for route in routes]
+    best_lengths = lengths[:]
+    best_objective = objective(best_lengths)
     no_improvement = 0
 
     for _ in range(MAX_ITERATIONS):
         if time.perf_counter() - start >= TIME_LIMIT:
             break
 
-        candidate_assigned = current_assigned[:]
-        candidate_load = current_load[:]
-        count = min(DESTROY_COUNT, len(vehicles))
-        destroyed = rng.sample(vehicles, count)
+        candidate_routes = [route[:] for route in current_routes]
+        candidate_lengths = current_lengths[:]
+        destroyed = choose_destroyed_routes(candidate_routes, candidate_lengths, rng)
+        removed = destroy(candidate_routes, candidate_lengths, destroyed)
+        rng.shuffle(removed)
 
-        feasible = repair_destroyed_vehicles(
-            candidate_assigned,
-            candidate_load,
-            destroyed,
-            by_ratio,
-            weight,
-            value,
-            low,
-            high,
+        feasible = repair(
+            removed,
+            candidate_routes,
+            candidate_lengths,
+            n,
+            m,
+            parcel_quantity,
+            capacity,
+            distance,
             rng,
         )
         if not feasible:
             continue
 
-        candidate_score = solution_score(candidate_assigned, value)
-        current_assigned = candidate_assigned
-        current_load = candidate_load
+        candidate_objective = objective(candidate_lengths)
+        current_objective = objective(current_lengths)
+        threshold = best_objective[0] * 1.03
 
-        if candidate_score > best_score:
-            best_score = candidate_score
-            best_assigned = candidate_assigned[:]
-            best_load = candidate_load[:]
+        if candidate_objective <= current_objective or candidate_objective[0] <= threshold:
+            current_routes = candidate_routes
+            current_lengths = candidate_lengths
+
+        if candidate_objective < best_objective:
+            best_objective = candidate_objective
+            best_routes = [route[:] for route in candidate_routes]
+            best_lengths = candidate_lengths[:]
             no_improvement = 0
         else:
             no_improvement += 1
 
         if no_improvement >= RESET_AFTER:
-            current_assigned = best_assigned[:]
-            current_load = best_load[:]
+            current_routes = [route[:] for route in best_routes]
+            current_lengths = best_lengths[:]
             no_improvement = 0
 
-    return best_assigned
+    return best_routes, best_lengths
+
+
+def route_points(route, n, m):
+    points = [0]
+    for request in route:
+        points.extend(request_nodes(request, n, m))
+    points.append(0)
+    return points
+
+
+def write_solution(routes, n, m):
+    output = [str(len(routes))]
+    for route in routes:
+        points = route_points(route, n, m)
+        output.append(str(len(points)))
+        output.append(" ".join(map(str, points)))
+    sys.stdout.write("\n".join(output))
 
 
 def main():
-    first_line = sys.stdin.buffer.readline().split()
-    if not first_line:
+    instance = read_instance()
+    if instance is None:
         return
 
-    n, k = map(int, first_line)
-    weight = [0] * (n + 1)
-    value = [0] * (n + 1)
-    for oid in range(1, n + 1):
-        weight[oid], value[oid] = map(
-            int, sys.stdin.buffer.readline().split()
-        )
-
-    vehicles = list(range(1, k + 1))
-    low = [0] * (k + 1)
-    high = [0] * (k + 1)
-    for b in vehicles:
-        low[b], high[b] = map(int, sys.stdin.buffer.readline().split())
-
-    assigned, load, by_ratio = make_initial_solution(
-        n, k, weight, value, low, high
+    n, m, k, parcel_quantity, capacity, distance = instance
+    routes, lengths = greedy_routes(n, m, k, parcel_quantity, capacity, distance)
+    routes, _ = large_neighborhood_search(
+        routes, lengths, n, m, parcel_quantity, capacity, distance
     )
-    assigned = large_neighborhood_search(
-        assigned,
-        load,
-        vehicles,
-        by_ratio,
-        weight,
-        value,
-        low,
-        high,
-    )
-
-    answer = [
-        (oid, assigned[oid])
-        for oid in range(1, n + 1)
-        if assigned[oid] != 0
-    ]
-    output = [str(len(answer))]
-    output.extend(f"{oid} {b}" for oid, b in answer)
-    sys.stdout.write("\n".join(output))
+    write_solution(routes, n, m)
 
 
 if __name__ == "__main__":
