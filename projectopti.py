@@ -91,22 +91,22 @@ def best_insertion(
     demand = request_demand(request, n, parcel_quantity)
     largest = max(lengths, default=0)
     largest_count = sum(length == largest for length in lengths)
-    second_largest = max((x for x in lengths if x != largest), default=0)
+    second_largest = max((x for x in lengths if x != largest), default=0)  # choose second largest to try to balance, avoiding overloading
 
     best = None
     for taxi, route in enumerate(routes):
-        if capacity[taxi] < demand:
+        if capacity[taxi] < demand: # if not enough capacity, skip
             continue
 
         other_max = largest
         if lengths[taxi] == largest and largest_count == 1:
-            other_max = second_largest
+            other_max = second_largest    # find second largest, the smaller the better
 
-        for position in range(len(route) + 1):
+        for position in range(len(route) + 1):  # try to insert a good place 
             delta = insertion_delta(route, position, request, n, m, distance)
             new_length = lengths[taxi] + delta
-            key = (max(other_max, new_length), new_length, delta)
-            if best is None or key < best[0]:
+            key = (max(other_max, new_length), new_length, delta) # choose the route that has the minimal cost 
+            if best is None or key < best[0]:  # update the best route
                 best = (key, taxi, position, delta)
 
     return best

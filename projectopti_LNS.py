@@ -141,21 +141,21 @@ def greedy_routes(n, m, k, parcel_quantity, capacity, distance):
 
 
 def objective(lengths):
-    return max(lengths, default=0), sum(lengths)
+    return max(lengths, default=0), sum(lengths) # reduce the longest route, if the longest route is equal, reduce the total length
 
 
-def choose_destroyed_routes(routes, lengths, rng):
+def choose_destroyed_routes(routes, lengths, rng): 
     nonempty = [taxi for taxi, route in enumerate(routes) if route]
     if not nonempty:
         return []
 
-    nonempty.sort(key=lambda taxi: lengths[taxi], reverse=True)
-    first = rng.choice(nonempty[: min(3, len(nonempty))])
-    destroyed = [first]
-    remaining = [taxi for taxi in nonempty if taxi != first]
-    extra = min(DESTROY_ROUTES - 1, len(remaining))
+    nonempty.sort(key=lambda taxi: lengths[taxi], reverse=True) # sort from longest to shortest
+    first = rng.choice(nonempty[: min(3, len(nonempty))]) # choose 3 longest randomly to destroy
+    destroyed = [first] # create destroyed list
+    remaining = [taxi for taxi in nonempty if taxi != first] # other unchoosen taxi
+    extra = min(DESTROY_ROUTES - 1, len(remaining)) # chek whether are there any taxi left
     if extra:
-        destroyed.extend(rng.sample(remaining, extra))
+        destroyed.extend(rng.sample(remaining, extra)) # choose randomly
     return destroyed
 
 
